@@ -1,72 +1,86 @@
 import logging
-from ExcelImporter import ExcelImporter
-from FinancialProcessor import FinancialProcessor
-from SecurityMonitor import SecurityMonitor
-from DatabaseConnector import DatabaseConnector
+from excel_importer import ExcelImporter
+from financial_processor import FinancialProcessor
+from security_monitor import SecurityMonitor
+import os
 
 # Configuração de log
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class ApplicationController:
-    def __init__(self, encryption_key, excel_file_path):
+    def __init__(self, encryption_key, storage_path="utils/data/"):
         """
-        Controlador da aplicação para gerenciar todos os módulos.
-        :param encryption_key: Chave de criptografia para os dados.
-        :param excel_file_path: Caminho do arquivo Excel para importação inicial.
+        Controlador principal para gerenciar todos os módulos do sistema.
+        :param encryption_key: Chave de criptografia para dados.
+        :param storage_path: Caminho para armazenamento de dados.
         """
         self.encryption_key = encryption_key
-        self.excel_file_path = excel_file_path
+        self.storage_path = storage_path
 
         # Inicializar módulos
-        self.excel_importer = ExcelImporter(file_path=self.excel_file_path, encryption_key=self.encryption_key)
+        self.excel_importer = ExcelImporter(encryption_key, storage_path)
         self.processor = FinancialProcessor()
-        self.db_connector = DatabaseConnector()
         self.security_monitor = SecurityMonitor(data_paths=[
-            "utils/data/custos/",
-            "utils/data/receitas/",
-            "utils/data/programados/"
+            os.path.join(storage_path, "custos"),
+            os.path.join(storage_path, "receitas"),
+            os.path.join(storage_path, "programados")
         ])
 
-    def import_data(self, data_type, overwrite=False):
+    def import_data(self, file_path, data_type):
         """
-        Importa dados do Excel e armazena no banco de dados.
-        :param data_type: Tipo de dado a importar (custos, receitas, programados).
-        :param overwrite: Determina se os dados existentes devem ser sobrescritos.
+        Importa dados de um arquivo Excel para o sistema.
+        :param file_path: Caminho do arquivo Excel.
+        :param data_type: Tipo de dado a ser importado (custos, receitas, programados).
         """
-        data = self.excel_importer.import_financial_data(data_type=data_type, overwrite=overwrite)
-        if data is not None:
-            self.db_connector.insert_data(data_type, data.to_dict(orient='records'))
-            logging.info(f"Dados do tipo {data_type} importados e armazenados com sucesso.")
+        try:
+            logging.info(f"Importando dados do arquivo: {file_path}")
+            data = self.excel_importer.import_financial_data(file_path, data_type)
+            if data is not None:
+                logging.info(f"Dados de {data_type} importados com sucesso.")
+                return True
+            else:
+                logging.warning(f"Falha ao importar dados de {data_type}.")
+                return False
+        except Exception as e:
+            logging.error(f"Erro ao importar dados: {e}")
+            return False
 
     def analyze_financials(self):
         """
-        Realiza análises financeiras e retorna resultados.
+        Realiza análise financeira com os dados armazenados.
         """
-        all_costs = self.db_connector.fetch_data("custos")
-        all_revenues = self.db_connector.fetch_data("receitas")
-        costs_df = pd.DataFrame(all_costs)
-        revenues_df = pd.DataFrame(all_revenues)
+        try:
+            custos_path = os.path.join(self.storage_path, "custos_data.json")
+            receitas_path = os.path.join(self.storage_path, "receitas_data.json")
 
-        # Índices de crescimento
-        growth_costs = self.processor.calculate_growth_indices(costs_df, 'custos')
-        growth_revenues = self.processor.calculate_growth_indices(revenues_df, 'receitas')
+            custos_data = self.excel_importer.load_encrypted_data(custos_path)
+            receitas_data = self.excel_importer.load_encrypted_data(receitas_path)
 
-        # Análise orçamentária
-        budget_analysis = self.processor.analyze_budget(costs_df)
+            growth_costs = self.processor.calculate_growth_indices(custos_data, 'custos')
+            growth_revenues = self.processor.calculate_growth_indices(receitas_data, 'receitas')
 
-        return {
-            "Crescimento Custos": growth_costs,
-            "Crescimento Receitas": growth_revenues,
-            "Análise Orçamentária": budget_analysis
-        }
+            return {
+                "Crescimento Custos": growth_costs,
+                "Crescimento Receitas": growth_revenues
+            }
+        except Exception as e:
+            logging.error(f"Erro ao realizar análise financeira: {e}")
+            return None
 
-    def forecast_cash_flow(self):
+    def clear_all_data(self):
         """
-        Realiza previsão de fluxo de caixa com base nos dados disponíveis.
+        Limpa todos os dados armazenados no sistema.
         """
-        all_data = self.db_connector.fetch_data("custos") + self.db_connector.fetch_data("receitas")
-        combined_df = pd.DataFrame(all_data)
-        return self.processor.forecast_cash_flow(combined_df)
+        try:
+            for file in os.listdir(self.storage_path):
+                file_path = os.path.join(self.storage_path, file)
+                if os.path.isfile(file_path):
+                    os.remove(file_path)
+            logging.info("Todos os dados foram limpos com sucesso.")
+            return True
+        except Exception as e:
+            logging.error(f"Erro ao limpar dados: {e}")
+            return False
 
     def start_security_monitor(self):
         """
@@ -77,20 +91,23 @@ class ApplicationController:
 # Exemplo de uso
 if __name__ == "__main__":
     encryption_key = b'kMFeIcTPHnVRP1XsZ3qBLRMG6qL0JH8sWuE1yN9ybXU='
-    excel_file_path = "caminho/para/arquivo.xlsx"
+    app_controller = ApplicationController(encryption_key)
 
-    app_controller = ApplicationController(encryption_key, excel_file_path)
+    # Testar importação de dados
+    success = app_controller.import_data("caminho/para/arquivo.xlsx", "custos")
+    if success:
+        print("Dados importados com sucesso.")
+    else:
+        print("Falha na importação de dados.")
 
-    # Importar dados de custos
-    app_controller.import_data(data_type="custos", overwrite=False)
+    # Testar análise financeira
+    analysis = app_controller.analyze_financials()
+    if analysis:
+        print("Análise financeira realizada com sucesso:")
+        print(analysis)
 
-    # Analisar dados financeiros
-    financial_analysis = app_controller.analyze_financials()
-    print(financial_analysis)
-
-    # Prever fluxo de caixa
-    cash_flow_forecast = app_controller.forecast_cash_flow()
-    print(cash_flow_forecast)
-
-    # Iniciar monitoramento de segurança
-    app_controller.start_security_monitor()
+    # Testar limpeza de dados
+    if app_controller.clear_all_data():
+        print("Todos os dados foram limpos com sucesso.")
+    else:
+        print("Falha ao limpar os dados.")
