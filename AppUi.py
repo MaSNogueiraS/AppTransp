@@ -1,10 +1,49 @@
 import sys
-from PyQt5.QtWidgets import QApplication, QMainWindow, QStackedWidget, QPushButton, QLabel, QVBoxLayout, QWidget, QFileDialog, QMessageBox
+from PyQt5.QtWidgets import QApplication, QMainWindow, QStackedWidget, QPushButton, QLabel, QVBoxLayout, QWidget, QFileDialog, QMessageBox, QDialog, QComboBox, QCalendarWidget, QCheckBox, QLineEdit, QFormLayout
 from PyQt5.QtCore import Qt
 from PyQt5.QtChart import QChart, QChartView, QLineSeries, QValueAxis
 from PyQt5.QtGui import QPainter
-from application_controller import ApplicationController
+from ApplicationController import ApplicationController
 import pandas as pd
+import os
+
+class DataSelectionDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Adicionar Dados")
+        self.setGeometry(200, 200, 400, 300)
+
+        self.type_combo = QComboBox()
+        self.type_combo.addItems(["Custos", "Receitas", "Programados"])
+
+        self.calendar = QCalendarWidget()
+
+        self.programmed_checkbox = QCheckBox("Dados Programados")
+
+        self.file_name_input = QLineEdit()
+        self.file_name_input.setPlaceholderText("Nome do Arquivo")
+
+        self.submit_button = QPushButton("Confirmar")
+        self.submit_button.clicked.connect(self.accept)
+
+        self.cancel_button = QPushButton("Cancelar")
+        self.cancel_button.clicked.connect(self.reject)
+
+        layout = QFormLayout()
+        layout.addRow("Tipo de Dado:", self.type_combo)
+        layout.addRow("Mês/Ano:", self.calendar)
+        layout.addRow("Programado:", self.programmed_checkbox)
+        layout.addRow("Nome do Arquivo:", self.file_name_input)
+        layout.addRow(self.submit_button, self.cancel_button)
+
+        self.setLayout(layout)
+
+    def get_data(self):
+        selected_type = self.type_combo.currentText()
+        selected_date = self.calendar.selectedDate().toString("yyyy-MM")
+        is_programmed = self.programmed_checkbox.isChecked()
+        file_name = self.file_name_input.text()
+        return selected_type, selected_date, is_programmed, file_name
 
 class MainWindow(QMainWindow):
     def __init__(self, app_controller):
@@ -177,23 +216,31 @@ class MainWindow(QMainWindow):
         file_path, _ = QFileDialog.getOpenFileName(self, "Selecionar Arquivo Excel", "", "Arquivos Excel (*.xlsx);;Todos os Arquivos (*)", options=options)
 
         if file_path:
-            data_type, ok = self.get_data_type()
-            if ok:
-                self.process_excel_file(file_path, data_type)
+            dialog = DataSelectionDialog(self)
+            if dialog.exec_():
+                data_type, selected_date, is_programmed, file_name = dialog.get_data()
+                self.process_excel_file(file_path, data_type, selected_date, is_programmed, file_name)
 
-    def get_data_type(self):
-        data_types = {"Custos": "custos", "Receitas": "receitas", "Programados": "programados"}
-        items = list(data_types.keys())
-        selected, ok = QMessageBox.question(
-            self, "Selecionar Tipo de Dados", "Escolha o tipo de dados para importar:",
-            QMessageBox.Yes | QMessageBox.No
-        ), True
-
-        return (data_types.get(selected), ok) if ok else (None, False)
-
-    def process_excel_file(self, file_path, data_type):
+    def process_excel_file(self, file_path, data_type, selected_date, is_programmed, file_name):
         try:
-            data = self.app_controller.import_data(file_path, data_type)
+            renamed_file_path = os.path.join(os.path.dirname(file_path), f"{file_name}_{selected_date}.xlsx")
+
+            # Verifica se o arquivo já existe
+            if os.path.exists(renamed_file_path):
+                response = QMessageBox.question(self, "Arquivo Existente", "Dados para este mês já existem. Deseja adicionar ou sobrescrever?", 
+                                                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+                if response == QMessageBox.Yes:
+                    # Adicionar dados ao arquivo existente
+                    self.app_controller.append_data(renamed_file_path, data_type)
+                elif response == QMessageBox.No:
+                    # Sobrescrever o arquivo existente
+                    os.remove(renamed_file_path)
+                    os.rename(file_path, renamed_file_path)
+            else:
+                # Renomeia diretamente caso não exista
+                os.rename(file_path, renamed_file_path)
+
+            data = self.app_controller.import_data(renamed_file_path, data_type)
             if data:
                 QMessageBox.information(self, "Sucesso", f"Dados de {data_type} adicionados com sucesso.")
                 self.update_financial_display()
@@ -228,10 +275,8 @@ class MainWindow(QMainWindow):
 if __name__ == "__main__":
     app = QApplication(sys.argv)
 
-    # Inicializar controlador da aplicação
     encryption_key = b'kMFeIcTPHnVRP1XsZ3qBLRMG6qL0JH8sWuE1yN9ybXU='
-    excel_file_path = "caminho/para/arquivo.xlsx"
-    app_controller = ApplicationController(encryption_key, excel_file_path)
+    app_controller = ApplicationController(encryption_key)
 
     main_window = MainWindow(app_controller)
     main_window.show()
