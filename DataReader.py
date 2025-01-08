@@ -1,101 +1,88 @@
 import os
 import logging
-import json
 import pandas as pd
 from cryptography.fernet import Fernet
-from datetime import datetime
+import json
 
-# Configuração de log
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
-# Classe para leitura e descriptografia dos dados
 class DataReader:
-    def __init__(self, encryption_key: str):
+    def __init__(self, encryption_key, storage_path="utils/data/"):
+        """
+        Módulo para leitura e manipulação de dados armazenados.
+        :param encryption_key: Chave de criptografia para os dados.
+        :param storage_path: Caminho de armazenamento dos dados processados.
+        """
         self.encryption_key = encryption_key
-        self.storage_path = "utils/data/"
-        self.custos_path = os.path.join(self.storage_path, "custos/")
-        self.receitas_path = os.path.join(self.storage_path, "receitas/")
-        self.programados_path = os.path.join(self.storage_path, "programados/")
+        self.storage_path = storage_path
+        os.makedirs(storage_path, exist_ok=True)
 
-        # Criar subpastas, se não existirem
-        os.makedirs(self.custos_path, exist_ok=True)
-        os.makedirs(self.receitas_path, exist_ok=True)
-        os.makedirs(self.programados_path, exist_ok=True)
-
-    def fetch_data(self, start_date: str, end_date: str, data_type: str = "ambos") -> pd.DataFrame:
+    def load_encrypted_data(self, file_path):
+        """
+        Carrega e descriptografa dados de um arquivo existente.
+        :param file_path: Caminho do arquivo.
+        """
         try:
-            # Converter as datas para o formato correto
-            start_date = datetime.strptime(start_date, '%Y-%m')
-            end_date = datetime.strptime(end_date, '%Y-%m')
-
-            # Determinar os caminhos relevantes
-            paths = []
-            if data_type in ["custos", "ambos"]:
-                paths.append(self.custos_path)
-            if data_type in ["receitas", "ambos"]:
-                paths.append(self.receitas_path)
-            if data_type in ["programados", "ambos"]:
-                paths.append(self.programados_path)
-
-            all_data = []
-
-            for path in paths:
-                if not os.path.exists(path):
-                    logging.warning(f"Caminho não encontrado: {path}")
-                    continue
-
-                # Iterar sobre os arquivos no diretório
-                for file_name in os.listdir(path):
-                    # Extrair o mês e ano do nome do arquivo
-                    if file_name.endswith('.json'):
-                        file_date = datetime.strptime(file_name.split('_')[0], '%Y_%m')
-
-                        # Verificar se o arquivo está no intervalo desejado
-                        if start_date <= file_date <= end_date:
-                            file_path = os.path.join(path, file_name)
-                            data = self._read_and_decrypt_file(file_path)
-                            if data is not None:
-                                all_data.append(data)
-
-            if not all_data:
-                logging.info("Nenhum dado encontrado no intervalo especificado.")
-                return pd.DataFrame()
-
-            # Combinar todos os dados em um único DataFrame
-            combined_data = pd.concat(all_data, ignore_index=True)
-            return combined_data
-
+            with open(file_path, 'r') as f:
+                encrypted_data = json.load(f)["data"]
+                fernet = Fernet(self.encryption_key)
+                decrypted_data = fernet.decrypt(encrypted_data.encode()).decode()
+                return pd.read_json(decrypted_data)
         except Exception as e:
-            logging.error(f"Erro ao buscar dados: {e}")
+            logging.error(f"Erro ao carregar dados do arquivo {file_path}: {e}")
             return pd.DataFrame()
 
-    def _read_and_decrypt_file(self, file_path: str) -> pd.DataFrame:
+    def read_data_by_date(self, data_type, start_date=None, end_date=None):
+        """
+        Lê dados de arquivos com base no tipo e intervalo de datas.
+        :param data_type: Tipo de dado (custos, receitas, programados).
+        :param start_date: Data inicial no formato "yyyy-MM".
+        :param end_date: Data final no formato "yyyy-MM".
+        :return: DataFrame combinado contendo os dados dentro do intervalo.
+        """
         try:
-            # Carregar o arquivo JSON criptografado
-            with open(file_path, 'r') as file:
-                encrypted_content = json.load(file)["data"]
+            relevant_files = []
+            all_files = os.listdir(self.storage_path)
 
-            # Descriptografar o conteúdo
-            fernet = Fernet(self.encryption_key)
-            decrypted_content = fernet.decrypt(encrypted_content.encode()).decode()
+            for file_name in all_files:
+                if file_name.startswith(data_type):
+                    file_date = file_name.split("_")[1].replace(".json", "")
+                    if (not start_date or file_date >= start_date) and (not end_date or file_date <= end_date):
+                        relevant_files.append(file_name)
 
-            # Converter JSON para DataFrame
-            data = pd.read_json(decrypted_content, orient='records')
-            logging.info(f"Dados descriptografados com sucesso de {file_path}.")
-            return data
+            combined_data = pd.DataFrame()
 
+            for file_name in relevant_files:
+                file_path = os.path.join(self.storage_path, file_name)
+                data = self.load_encrypted_data(file_path)
+                combined_data = pd.concat([combined_data, data], ignore_index=True)
+
+            return combined_data
         except Exception as e:
-            logging.error(f"Erro ao descriptografar o arquivo {file_path}: {e}")
-            return None
+            logging.error(f"Erro ao ler dados por data: {e}")
+            return pd.DataFrame()
+
+    def analyze_data(self, combined_data):
+        """
+        Realiza análise básica nos dados combinados.
+        :param combined_data: DataFrame contendo os dados combinados.
+        :return: DataFrame com resultados agregados por categoria.
+        """
+        try:
+            grouped = combined_data.groupby(["Categoria"])["Valor"].sum().reset_index()
+            grouped = grouped.sort_values(by="Valor", ascending=False)
+            return grouped
+        except Exception as e:
+            logging.error(f"Erro ao analisar dados: {e}")
+            return pd.DataFrame()
 
 # Exemplo de uso
 if __name__ == "__main__":
-    encryption_key = b'kMFeIcTPHnVRP1XsZ3qBLRMG6qL0JH8sWuE1yN9ybXU='
-    data_reader = DataReader(encryption_key)
+    encryption_key = Fernet.generate_key()
+    reader = DataReader(encryption_key)
 
-    # Exemplo: Buscar dados de janeiro e fevereiro de 2024 para ambos os tipos
-    data = data_reader.fetch_data("2024-01", "2024-02", data_type="ambos")
+    # Exemplo de leitura de dados
+    data = reader.read_data_by_date("custos", "2023-01", "2023-06")
     if not data.empty:
-        print(data.head())
+        analysis = reader.analyze_data(data)
+        print(analysis)
     else:
-        print("Nenhum dado encontrado.")
+        print("Nenhum dado disponível no intervalo selecionado.")
