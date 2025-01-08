@@ -24,7 +24,7 @@ class ExcelImporter:
 
     def load_categories(self):
         """
-        Carrega categorias salvas para fornecedores e clientes.
+        Carrega categorias salvas para fornecedores, clientes e investimentos.
         """
         try:
             categories_file = os.path.join(self.storage_path, "categories.json")
@@ -37,7 +37,7 @@ class ExcelImporter:
 
     def save_categories(self):
         """
-        Salva categorias atuais para fornecedores e clientes.
+        Salva categorias atuais para fornecedores, clientes e investimentos.
         """
         try:
             categories_file = os.path.join(self.storage_path, "categories.json")
@@ -69,6 +69,7 @@ class ExcelImporter:
                 logging.error("Tipo de dado desconhecido.")
                 return None
 
+            # Salvar os dados processados criptografados
             self.save_encrypted_data(df, data_type)
             return df
         except Exception as e:
@@ -87,6 +88,7 @@ class ExcelImporter:
         df = df[required_columns]
         df.columns = ['Fornecedor', 'Data Pagamento', 'Valor']
         df['Categoria'] = df['Fornecedor'].apply(self.categorize_supplier)
+        df['Tipo'] = df['Categoria'].apply(lambda x: 'Investimento' if 'investimento' in x.lower() else 'Custo')
         return df
 
     def process_revenues(self, df):
