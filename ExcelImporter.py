@@ -47,11 +47,12 @@ class ExcelImporter:
         except Exception as e:
             logging.error(f"Erro ao salvar categorias: {e}")
 
-    def import_financial_data(self, file_path, data_type):
+    def import_financial_data(self, file_path, data_type, selected_date):
         """
         Importa dados financeiros de um arquivo Excel.
         :param file_path: Caminho do arquivo Excel.
         :param data_type: Tipo de dado a importar (custos, receitas, programados).
+        :param selected_date: Data selecionada (yyyy-MM).
         """
         if not os.path.exists(file_path):
             logging.error(f"Arquivo não encontrado: {file_path}")
@@ -69,8 +70,26 @@ class ExcelImporter:
                 logging.error("Tipo de dado desconhecido.")
                 return None
 
-            # Salvar os dados processados criptografados
-            self.save_encrypted_data(df, data_type)
+            # Verificar se já existe arquivo para o tipo e data
+            file_name = f"{data_type}_{selected_date}.json"
+            file_path = os.path.join(self.storage_path, file_name)
+
+            if os.path.exists(file_path):
+                user_choice = input("Dados para esta data já existem. Deseja (A)dicionar, (S)obrescrever ou (C)riar novo? ").strip().upper()
+                if user_choice == "A":
+                    self.append_to_existing_data(file_path, df)
+                elif user_choice == "S":
+                    self.save_encrypted_data(df, file_path)
+                elif user_choice == "C":
+                    new_file_name = f"{data_type}_{selected_date}_novo.json"
+                    new_file_path = os.path.join(self.storage_path, new_file_name)
+                    self.save_encrypted_data(df, new_file_path)
+                else:
+                    logging.warning("Escolha inválida. Operação cancelada.")
+                    return None
+            else:
+                # Salvar os dados processados criptografados
+                self.save_encrypted_data(df, file_path)
             return df
         except Exception as e:
             logging.error(f"Erro ao importar dados: {e}")
@@ -134,7 +153,22 @@ class ExcelImporter:
             self.categories[client] = input(f"Por favor, categorize o cliente '{client}': ")
         return self.categories[client]
 
-    def save_encrypted_data(self, df, data_type):
+    def append_to_existing_data(self, file_path, new_data):
+        """
+        Adiciona dados novos a um arquivo existente.
+        """
+        try:
+            fernet = Fernet(self.encryption_key)
+            with open(file_path, 'r') as f:
+                encrypted_data = json.load(f)["data"]
+                existing_data = pd.read_json(fernet.decrypt(encrypted_data.encode()).decode())
+
+            combined_data = pd.concat([existing_data, new_data], ignore_index=True)
+            self.save_encrypted_data(combined_data, file_path)
+        except Exception as e:
+            logging.error(f"Erro ao adicionar dados: {e}")
+
+    def save_encrypted_data(self, df, file_path):
         """
         Criptografa e salva os dados processados.
         """
@@ -143,13 +177,10 @@ class ExcelImporter:
             json_data = df.to_json(orient='records')
             encrypted_data = fernet.encrypt(json_data.encode()).decode()
 
-            file_name = f"{data_type}_data.json"
-            file_path = os.path.join(self.storage_path, file_name)
-
             with open(file_path, 'w') as f:
                 json.dump({"data": encrypted_data}, f)
 
-            logging.info(f"Dados de {data_type} salvos com sucesso.")
+            logging.info(f"Dados salvos com sucesso em {file_path}.")
         except Exception as e:
             logging.error(f"Erro ao salvar dados criptografados: {e}")
 
@@ -157,4 +188,4 @@ class ExcelImporter:
 if __name__ == "__main__":
     encryption_key = Fernet.generate_key()
     importer = ExcelImporter(encryption_key)
-    importer.import_financial_data("caminho/para/arquivo.xlsx", "custos")
+    importer.import_financial_data("caminho/para/arquivo.xlsx", "custos", "2023-05")
