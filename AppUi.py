@@ -3,7 +3,7 @@ from PyQt5.QtWidgets import QApplication, QMainWindow, QStackedWidget, QPushButt
 from PyQt5.QtCore import Qt
 from PyQt5.QtChart import QChart, QChartView, QLineSeries, QValueAxis
 from PyQt5.QtGui import QPainter
-from ApplicationController import ApplicationController
+from application_controller import ApplicationController
 import pandas as pd
 import os
 
@@ -123,18 +123,13 @@ class MainWindow(QMainWindow):
         series_trend.setName("Tendência")
 
         # Obter dados do controlador
-        data = self.app_controller.analyze_financials()
-        if data:
-            last_6_months = list(data.get("Crescimento Custos", {}).keys())[-6:]
-            for i, month in enumerate(last_6_months):
-                series_costs.append(i, data["Crescimento Custos"].get(month, 0))
-                series_revenues.append(i, data["Crescimento Receitas"].get(month, 0))
-                series_results.append(i, data["Crescimento Receitas"].get(month, 0) - data["Crescimento Custos"].get(month, 0))
-
-            # Calcular tendência
-            trend_data = self.app_controller.forecast_cash_flow()
-            for i, (month, value) in enumerate(trend_data.items()):
-                series_trend.append(i + len(last_6_months), value)
+        data = self.app_controller.analyze_financial_data()
+        if data is not None:
+            for i, row in data.iterrows():
+                series_costs.append(i, row["Custos"])
+                series_revenues.append(i, row["Receitas"])
+                series_results.append(i, row["Resultado"])
+                series_trend.append(i, row["Tendência"])
 
         chart.addSeries(series_costs)
         chart.addSeries(series_revenues)
@@ -212,8 +207,7 @@ class MainWindow(QMainWindow):
         return widget
 
     def add_data(self):
-        options = QFileDialog.Options()
-        file_path, _ = QFileDialog.getOpenFileName(self, "Selecionar Arquivo Excel", "", "Arquivos Excel (*.xlsx);;Todos os Arquivos (*)", options=options)
+        file_path, _ = QFileDialog.getOpenFileName(self, "Selecionar Arquivo Excel", "", "Arquivos Excel (*.xlsx)")
 
         if file_path:
             dialog = DataSelectionDialog(self)
@@ -223,36 +217,29 @@ class MainWindow(QMainWindow):
 
     def process_excel_file(self, file_path, data_type, selected_date, is_programmed, file_name):
         try:
-            renamed_file_path = os.path.join(os.path.dirname(file_path), f"{file_name}_{selected_date}.xlsx")
+            renamed_file_path = os.path.join(self.app_controller.storage_path, f"{file_name}_{selected_date}.xlsx")
 
-            # Verifica se o arquivo já existe
             if os.path.exists(renamed_file_path):
                 response = QMessageBox.question(self, "Arquivo Existente", "Dados para este mês já existem. Deseja adicionar ou sobrescrever?", 
                                                 QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-                if response == QMessageBox.Yes:
-                    # Adicionar dados ao arquivo existente
-                    self.app_controller.append_data(renamed_file_path, data_type)
-                elif response == QMessageBox.No:
-                    # Sobrescrever o arquivo existente
+                if response == QMessageBox.No:
                     os.remove(renamed_file_path)
-                    os.rename(file_path, renamed_file_path)
-            else:
-                # Renomeia diretamente caso não exista
-                os.rename(file_path, renamed_file_path)
 
-            data = self.app_controller.import_data(renamed_file_path, data_type)
-            if data:
-                QMessageBox.information(self, "Sucesso", f"Dados de {data_type} adicionados com sucesso.")
+            os.rename(file_path, renamed_file_path)
+
+            success = self.app_controller.import_excel_data(renamed_file_path, data_type, selected_date)
+            if success:
+                QMessageBox.information(self, "Sucesso", "Dados importados com sucesso.")
                 self.update_financial_display()
             else:
                 QMessageBox.warning(self, "Erro", "Falha ao adicionar dados.")
         except Exception as e:
-            QMessageBox.critical(self, "Erro Crítico", str(e))
+            QMessageBox.critical(self, "Erro Crítico", f"Erro ao processar arquivo: {e}")
 
     def update_financial_display(self):
-        analysis = self.app_controller.analyze_financials()
-        if analysis:
-            self.financial_display.setText(f"Crescimento Custos: {analysis['Crescimento Custos']}\nCrescimento Receitas: {analysis['Crescimento Receitas']}")
+        analysis = self.app_controller.analyze_financial_data()
+        if analysis is not None:
+            self.financial_display.setText(f"Dados Financeiros: {analysis.to_string(index=False)}")
         else:
             self.financial_display.setText("Sem dados financeiros para exibir")
 
