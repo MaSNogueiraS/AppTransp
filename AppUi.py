@@ -1,6 +1,6 @@
 import sys
-from PyQt5.QtWidgets import QApplication, QMainWindow, QStackedWidget, QPushButton, QLabel, QVBoxLayout, QWidget, QFileDialog, QMessageBox, QDialog, QComboBox, QCalendarWidget, QCheckBox, QLineEdit, QFormLayout
-from PyQt5.QtCore import Qt
+from PyQt5.QtWidgets import QApplication, QMainWindow, QStackedWidget, QPushButton, QLabel, QVBoxLayout, QWidget, QFileDialog, QMessageBox, QDialog, QComboBox, QCheckBox, QFormLayout
+from PyQt5.QtCore import Qt, QDate
 from PyQt5.QtChart import QChart, QChartView, QLineSeries, QValueAxis
 from PyQt5.QtGui import QPainter
 from application_controller import ApplicationController
@@ -16,12 +16,13 @@ class DataSelectionDialog(QDialog):
         self.type_combo = QComboBox()
         self.type_combo.addItems(["Custos", "Receitas", "Programados"])
 
-        self.calendar = QCalendarWidget()
+        self.year_combo = QComboBox()
+        self.year_combo.addItems([str(year) for year in range(2020, QDate.currentDate().year() + 1)])
+
+        self.month_combo = QComboBox()
+        self.month_combo.addItems(["01 - Janeiro", "02 - Fevereiro", "03 - Março", "04 - Abril", "05 - Maio", "06 - Junho", "07 - Julho", "08 - Agosto", "09 - Setembro", "10 - Outubro", "11 - Novembro", "12 - Dezembro"])
 
         self.programmed_checkbox = QCheckBox("Dados Programados")
-
-        self.file_name_input = QLineEdit()
-        self.file_name_input.setPlaceholderText("Nome do Arquivo")
 
         self.submit_button = QPushButton("Confirmar")
         self.submit_button.clicked.connect(self.accept)
@@ -31,19 +32,19 @@ class DataSelectionDialog(QDialog):
 
         layout = QFormLayout()
         layout.addRow("Tipo de Dado:", self.type_combo)
-        layout.addRow("Mês/Ano:", self.calendar)
+        layout.addRow("Ano:", self.year_combo)
+        layout.addRow("Mês:", self.month_combo)
         layout.addRow("Programado:", self.programmed_checkbox)
-        layout.addRow("Nome do Arquivo:", self.file_name_input)
         layout.addRow(self.submit_button, self.cancel_button)
 
         self.setLayout(layout)
 
     def get_data(self):
         selected_type = self.type_combo.currentText()
-        selected_date = self.calendar.selectedDate().toString("yyyy-MM")
+        selected_year = self.year_combo.currentText()
+        selected_month = self.month_combo.currentText().split(" - ")[0]
         is_programmed = self.programmed_checkbox.isChecked()
-        file_name = self.file_name_input.text()
-        return selected_type, selected_date, is_programmed, file_name
+        return selected_type, f"{selected_year}-{selected_month}", is_programmed
 
 class MainWindow(QMainWindow):
     def __init__(self, app_controller):
@@ -212,12 +213,13 @@ class MainWindow(QMainWindow):
         if file_path:
             dialog = DataSelectionDialog(self)
             if dialog.exec_():
-                data_type, selected_date, is_programmed, file_name = dialog.get_data()
+                data_type, selected_date, is_programmed = dialog.get_data()
+                file_name = f"{data_type}_{selected_date.replace('-', '_')}"
                 self.process_excel_file(file_path, data_type, selected_date, is_programmed, file_name)
 
     def process_excel_file(self, file_path, data_type, selected_date, is_programmed, file_name):
         try:
-            renamed_file_path = os.path.join(self.app_controller.storage_path, f"{file_name}_{selected_date}.xlsx")
+            renamed_file_path = os.path.join(self.app_controller.storage_path, f"{file_name}.xlsx")
 
             if os.path.exists(renamed_file_path):
                 response = QMessageBox.question(self, "Arquivo Existente", "Dados para este mês já existem. Deseja adicionar ou sobrescrever?", 
