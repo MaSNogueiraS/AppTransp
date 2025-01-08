@@ -1,7 +1,10 @@
 import sys
-from PyQt5.QtWidgets import QApplication, QMainWindow, QStackedWidget, QPushButton, QLabel, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QApplication, QMainWindow, QStackedWidget, QPushButton, QLabel, QVBoxLayout, QWidget, QFileDialog, QMessageBox
 from PyQt5.QtCore import Qt
-from ApplicationController import ApplicationController
+from PyQt5.QtChart import QChart, QChartView, QLineSeries, QValueAxis
+from PyQt5.QtGui import QPainter
+from application_controller import ApplicationController
+import pandas as pd
 
 class MainWindow(QMainWindow):
     def __init__(self, app_controller):
@@ -40,13 +43,15 @@ class MainWindow(QMainWindow):
         title.setAlignment(Qt.AlignCenter)
         title.setStyleSheet("font-size: 24px; font-weight: bold;")
 
-        cash_label = QLabel("Saldo Atual: R$ 0.00")
-        cash_label.setAlignment(Qt.AlignCenter)
-        cash_label.setStyleSheet("font-size: 18px;")
+        self.cash_label = QLabel("Saldo Atual: Dados insuficientes")
+        self.cash_label.setAlignment(Qt.AlignCenter)
+        self.cash_label.setStyleSheet("font-size: 18px;")
 
-        forecast_label = QLabel("Previsão: Dados insuficientes")
-        forecast_label.setAlignment(Qt.AlignCenter)
-        forecast_label.setStyleSheet("font-size: 16px; color: gray;")
+        self.forecast_label = QLabel("Previsão: Dados insuficientes")
+        self.forecast_label.setAlignment(Qt.AlignCenter)
+        self.forecast_label.setStyleSheet("font-size: 16px; color: gray;")
+
+        self.chart_view = self.create_financial_chart()
 
         financial_button = QPushButton("Ir para Financeiro")
         financial_button.clicked.connect(self.show_financial_screen)
@@ -55,13 +60,70 @@ class MainWindow(QMainWindow):
         config_button.clicked.connect(self.show_configuration_screen)
 
         layout.addWidget(title)
-        layout.addWidget(cash_label)
-        layout.addWidget(forecast_label)
+        layout.addWidget(self.cash_label)
+        layout.addWidget(self.forecast_label)
+        layout.addWidget(self.chart_view)
         layout.addWidget(financial_button)
         layout.addWidget(config_button)
 
         widget.setLayout(layout)
         return widget
+
+    def create_financial_chart(self):
+        chart = QChart()
+        chart.setTitle("Resumo Financeiro dos Últimos 6 Meses")
+
+        series_costs = QLineSeries()
+        series_revenues = QLineSeries()
+        series_results = QLineSeries()
+        series_trend = QLineSeries()
+
+        series_costs.setName("Gastos")
+        series_revenues.setName("Receitas")
+        series_results.setName("Resultado")
+        series_trend.setName("Tendência")
+
+        # Obter dados do controlador
+        data = self.app_controller.analyze_financials()
+        if data:
+            last_6_months = list(data.get("Crescimento Custos", {}).keys())[-6:]
+            for i, month in enumerate(last_6_months):
+                series_costs.append(i, data["Crescimento Custos"].get(month, 0))
+                series_revenues.append(i, data["Crescimento Receitas"].get(month, 0))
+                series_results.append(i, data["Crescimento Receitas"].get(month, 0) - data["Crescimento Custos"].get(month, 0))
+
+            # Calcular tendência
+            trend_data = self.app_controller.forecast_cash_flow()
+            for i, (month, value) in enumerate(trend_data.items()):
+                series_trend.append(i + len(last_6_months), value)
+
+        chart.addSeries(series_costs)
+        chart.addSeries(series_revenues)
+        chart.addSeries(series_results)
+        chart.addSeries(series_trend)
+
+        axis_x = QValueAxis()
+        axis_x.setTitleText("Meses")
+        axis_x.setLabelFormat("%d")
+        chart.addAxis(axis_x, Qt.AlignBottom)
+
+        axis_y = QValueAxis()
+        axis_y.setTitleText("Valores")
+        chart.addAxis(axis_y, Qt.AlignLeft)
+
+        series_costs.attachAxis(axis_x)
+        series_costs.attachAxis(axis_y)
+        series_revenues.attachAxis(axis_x)
+        series_revenues.attachAxis(axis_y)
+        series_results.attachAxis(axis_x)
+        series_results.attachAxis(axis_y)
+        series_trend.attachAxis(axis_x)
+        series_trend.attachAxis(axis_y)
+
+        chart_view = QChartView(chart)
+        chart_view.setRenderHint(QPainter.Antialiasing)
+
+        return chart_view
 
     def create_financial_screen(self):
         widget = QWidget()
@@ -71,10 +133,19 @@ class MainWindow(QMainWindow):
         title.setAlignment(Qt.AlignCenter)
         title.setStyleSheet("font-size: 24px; font-weight: bold;")
 
+        add_data_button = QPushButton("Adicionar Dados")
+        add_data_button.clicked.connect(self.add_data)
+
+        self.financial_display = QLabel("Sem dados financeiros para exibir")
+        self.financial_display.setAlignment(Qt.AlignCenter)
+        self.financial_display.setStyleSheet("font-size: 16px; color: gray;")
+
         back_button = QPushButton("Voltar")
         back_button.clicked.connect(self.show_home_screen)
 
         layout.addWidget(title)
+        layout.addWidget(add_data_button)
+        layout.addWidget(self.financial_display)
         layout.addWidget(back_button)
 
         widget.setLayout(layout)
@@ -101,6 +172,43 @@ class MainWindow(QMainWindow):
         widget.setLayout(layout)
         return widget
 
+    def add_data(self):
+        options = QFileDialog.Options()
+        file_path, _ = QFileDialog.getOpenFileName(self, "Selecionar Arquivo Excel", "", "Arquivos Excel (*.xlsx);;Todos os Arquivos (*)", options=options)
+
+        if file_path:
+            data_type, ok = self.get_data_type()
+            if ok:
+                self.process_excel_file(file_path, data_type)
+
+    def get_data_type(self):
+        data_types = {"Custos": "custos", "Receitas": "receitas", "Programados": "programados"}
+        items = list(data_types.keys())
+        selected, ok = QMessageBox.question(
+            self, "Selecionar Tipo de Dados", "Escolha o tipo de dados para importar:",
+            QMessageBox.Yes | QMessageBox.No
+        ), True
+
+        return (data_types.get(selected), ok) if ok else (None, False)
+
+    def process_excel_file(self, file_path, data_type):
+        try:
+            data = self.app_controller.import_data(file_path, data_type)
+            if data:
+                QMessageBox.information(self, "Sucesso", f"Dados de {data_type} adicionados com sucesso.")
+                self.update_financial_display()
+            else:
+                QMessageBox.warning(self, "Erro", "Falha ao adicionar dados.")
+        except Exception as e:
+            QMessageBox.critical(self, "Erro Crítico", str(e))
+
+    def update_financial_display(self):
+        analysis = self.app_controller.analyze_financials()
+        if analysis:
+            self.financial_display.setText(f"Crescimento Custos: {analysis['Crescimento Custos']}\nCrescimento Receitas: {analysis['Crescimento Receitas']}")
+        else:
+            self.financial_display.setText("Sem dados financeiros para exibir")
+
     def show_home_screen(self):
         self.central_widget.setCurrentWidget(self.home_screen)
 
@@ -111,12 +219,11 @@ class MainWindow(QMainWindow):
         self.central_widget.setCurrentWidget(self.configuration_screen)
 
     def clear_data(self):
-        # Aqui chamamos o método do controlador para limpar os dados
         confirmation = self.app_controller.clear_all_data()
         if confirmation:
-            print("Dados limpos com sucesso.")
+            QMessageBox.information(self, "Sucesso", "Todos os dados foram limpos com sucesso.")
         else:
-            print("Erro ao limpar dados.")
+            QMessageBox.warning(self, "Erro", "Falha ao limpar os dados.")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
