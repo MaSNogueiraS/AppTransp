@@ -3,158 +3,156 @@ import os
 import logging
 from cryptography.fernet import Fernet
 import json
-from datetime import datetime
-from collections import Counter
+from collections import defaultdict
 
 # Configuração de log
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Classe para importar e criptografar dados financeiros de arquivos Excel
 class ExcelImporter:
-    def __init__(self, file_path: str, encryption_key: str):
-        self.file_path = file_path
+    def __init__(self, encryption_key, storage_path="utils/data/"):
+        """
+        Importa dados de arquivos Excel e gerencia armazenamento criptografado.
+        :param encryption_key: Chave de criptografia para os dados.
+        :param storage_path: Caminho de armazenamento dos dados processados.
+        """
         self.encryption_key = encryption_key
-        self.storage_path = "utils/data/"
+        self.storage_path = storage_path
+        os.makedirs(storage_path, exist_ok=True)
 
-        # Criar subpastas para diferentes tipos de dados
-        self.custos_path = os.path.join(self.storage_path, "custos/")
-        self.receitas_path = os.path.join(self.storage_path, "receitas/")
-        self.programados_path = os.path.join(self.storage_path, "programados/")
-        os.makedirs(self.custos_path, exist_ok=True)
-        os.makedirs(self.receitas_path, exist_ok=True)
-        os.makedirs(self.programados_path, exist_ok=True)
+        self.categories = defaultdict(lambda: "Não categorizado")
+        self.load_categories()
 
-    def import_financial_data(self, data_type: str, overwrite: bool = False):
-        if not os.path.exists(self.file_path):
-            logging.error(f"Arquivo Excel não encontrado: {self.file_path}")
+    def load_categories(self):
+        """
+        Carrega categorias salvas para fornecedores e clientes.
+        """
+        try:
+            categories_file = os.path.join(self.storage_path, "categories.json")
+            if os.path.exists(categories_file):
+                with open(categories_file, 'r') as f:
+                    self.categories.update(json.load(f))
+            logging.info("Categorias carregadas com sucesso.")
+        except Exception as e:
+            logging.error(f"Erro ao carregar categorias: {e}")
+
+    def save_categories(self):
+        """
+        Salva categorias atuais para fornecedores e clientes.
+        """
+        try:
+            categories_file = os.path.join(self.storage_path, "categories.json")
+            with open(categories_file, 'w') as f:
+                json.dump(self.categories, f)
+            logging.info("Categorias salvas com sucesso.")
+        except Exception as e:
+            logging.error(f"Erro ao salvar categorias: {e}")
+
+    def import_financial_data(self, file_path, data_type):
+        """
+        Importa dados financeiros de um arquivo Excel.
+        :param file_path: Caminho do arquivo Excel.
+        :param data_type: Tipo de dado a importar (custos, receitas, programados).
+        """
+        if not os.path.exists(file_path):
+            logging.error(f"Arquivo não encontrado: {file_path}")
             return None
 
         try:
-            # Identificar o tipo de arquivo baseado na entrada do usuário
-            excel_data = pd.ExcelFile(self.file_path)
-            sheet_name = excel_data.sheet_names[0]  # Supondo que a primeira aba contém os dados
-            df = pd.read_excel(self.file_path, sheet_name=sheet_name)
-
-            # Verificar o tipo e ajustar colunas
-            if data_type == "custos" and {'Fornecedor - Nome', 'Pagamento', 'Valor'}.issubset(df.columns):
-                logging.info("Planilha de custos detectada.")
-                df = df[['Fornecedor - Nome', 'Pagamento', 'Valor']]
-                df = df.rename(columns={
-                    'Fornecedor - Nome': 'Fornecedor',
-                    'Pagamento': 'Data Pagamento',
-                    'Valor': 'Valor Pago'
-                })
-                self.validate_and_store_data(df, "custos", overwrite)
-
-            elif data_type == "receitas" and {'Cliente - Nome', 'Pagamento', 'Valor'}.issubset(df.columns):
-                logging.info("Planilha de receitas detectada.")
-                df = df[['Cliente - Nome', 'Pagamento', 'Valor']]
-                df = df.rename(columns={
-                    'Cliente - Nome': 'Cliente',
-                    'Pagamento': 'Data Pagamento',
-                    'Valor': 'Valor Recebido'
-                })
-                self.validate_and_store_data(df, "receitas", overwrite)
-
-            elif data_type == "programados" and {'Descrição', 'Tipo', 'Pagamento', 'Valor'}.issubset(df.columns):
-                logging.info("Planilha de programados detectada.")
-                df = df[['Descrição', 'Tipo', 'Pagamento', 'Valor']]
-                df = df.rename(columns={
-                    'Descrição': 'Descrição',
-                    'Tipo': 'Tipo Programado',
-                    'Pagamento': 'Data Pagamento',
-                    'Valor': 'Valor Programado'
-                })
-                self.validate_and_store_data(df, "programados", overwrite)
-
+            df = pd.read_excel(file_path)
+            if data_type == "custos":
+                df = self.process_costs(df)
+            elif data_type == "receitas":
+                df = self.process_revenues(df)
+            elif data_type == "programados":
+                df = self.process_scheduled(df)
             else:
-                logging.error("Formato desconhecido no arquivo Excel para o tipo especificado.")
+                logging.error("Tipo de dado desconhecido.")
                 return None
 
-            logging.info("Dados importados com sucesso do arquivo Excel.")
+            self.save_encrypted_data(df, data_type)
             return df
         except Exception as e:
-            logging.error(f"Erro ao importar dados do arquivo Excel: {e}")
+            logging.error(f"Erro ao importar dados: {e}")
             return None
 
-    def validate_and_store_data(self, df: pd.DataFrame, data_type: str, overwrite: bool):
+    def process_costs(self, df):
+        """
+        Processa dados de custos.
+        """
+        required_columns = ['Fornecedor - Nome', 'Pagamento', 'Valor']
+        if not all(col in df.columns for col in required_columns):
+            logging.error("Colunas necessárias para custos não encontradas.")
+            return None
+
+        df = df[required_columns]
+        df.columns = ['Fornecedor', 'Data Pagamento', 'Valor']
+        df['Categoria'] = df['Fornecedor'].apply(self.categorize_supplier)
+        return df
+
+    def process_revenues(self, df):
+        """
+        Processa dados de receitas.
+        """
+        required_columns = ['Cliente - Nome', 'Pagamento', 'Valor']
+        if not all(col in df.columns for col in required_columns):
+            logging.error("Colunas necessárias para receitas não encontradas.")
+            return None
+
+        df = df[required_columns]
+        df.columns = ['Cliente', 'Data Pagamento', 'Valor']
+        df['Categoria'] = df['Cliente'].apply(self.categorize_client)
+        return df
+
+    def process_scheduled(self, df):
+        """
+        Processa dados programados.
+        """
+        required_columns = ['Descrição', 'Tipo', 'Pagamento', 'Valor']
+        if not all(col in df.columns for col in required_columns):
+            logging.error("Colunas necessárias para programados não encontradas.")
+            return None
+
+        df = df[required_columns]
+        df.columns = ['Descrição', 'Tipo Programado', 'Data Pagamento', 'Valor']
+        return df
+
+    def categorize_supplier(self, supplier):
+        """
+        Categoriza um fornecedor.
+        """
+        if supplier not in self.categories:
+            self.categories[supplier] = input(f"Por favor, categorize o fornecedor '{supplier}': ")
+        return self.categories[supplier]
+
+    def categorize_client(self, client):
+        """
+        Categoriza um cliente.
+        """
+        if client not in self.categories:
+            self.categories[client] = input(f"Por favor, categorize o cliente '{client}': ")
+        return self.categories[client]
+
+    def save_encrypted_data(self, df, data_type):
+        """
+        Criptografa e salva os dados processados.
+        """
         try:
-            # Extrair o mês e ano das datas
-            df['Data Pagamento'] = pd.to_datetime(df['Data Pagamento'], format='%d/%m/%Y')
-            df['MesAno'] = df['Data Pagamento'].dt.strftime('%Y_%m')
-
-            # Validar se todas as datas pertencem ao mesmo mês e ano
-            mes_ano_contagem = Counter(df['MesAno'])
-            if len(mes_ano_contagem) > 1:
-                logging.error("As datas no arquivo pertencem a múltiplos meses e anos.")
-                for mes_ano, count in mes_ano_contagem.items():
-                    logging.warning(f"{mes_ano}: {count} registros")
-                return
-
-            # Determinar o mês e ano para o nome do arquivo
-            mes_ano = df['MesAno'].iloc[0]
-            df.drop(columns=['MesAno'], inplace=True)
-
-            # Caminho de armazenamento
-            storage_path = {
-                "custos": self.custos_path,
-                "receitas": self.receitas_path,
-                "programados": self.programados_path
-            }.get(data_type, self.storage_path)
-
-            file_name = f"{mes_ano}_{data_type}.json"
-            file_full_path = os.path.join(storage_path, file_name)
-
-            # Verificar se o arquivo já existe
-            if os.path.exists(file_full_path) and not overwrite:
-                logging.info(f"Arquivo {file_full_path} já existe. Adicionando dados ao arquivo.")
-                existing_data = self._read_and_decrypt_file(file_full_path)
-                if existing_data is not None:
-                    df = pd.concat([existing_data, df], ignore_index=True)
-
-            # Criptografar e armazenar os dados
-            self.encrypt_and_store_data(df, file_full_path)
-        except Exception as e:
-            logging.error(f"Erro ao validar e armazenar os dados: {e}")
-
-    def encrypt_and_store_data(self, df: pd.DataFrame, file_full_path: str):
-        try:
-            # Criptografar dados
-            json_data = df.to_json(orient='records')
             fernet = Fernet(self.encryption_key)
+            json_data = df.to_json(orient='records')
             encrypted_data = fernet.encrypt(json_data.encode()).decode()
 
-            # Salvar dados criptografados em um arquivo
-            with open(file_full_path, 'w') as file:
-                json.dump({"data": encrypted_data}, file)
+            file_name = f"{data_type}_data.json"
+            file_path = os.path.join(self.storage_path, file_name)
 
-            logging.info(f"Dados criptografados e salvos em {file_full_path}.")
+            with open(file_path, 'w') as f:
+                json.dump({"data": encrypted_data}, f)
+
+            logging.info(f"Dados de {data_type} salvos com sucesso.")
         except Exception as e:
-            logging.error(f"Erro ao criptografar e armazenar os dados: {e}")
-
-    def _read_and_decrypt_file(self, file_path: str) -> pd.DataFrame:
-        try:
-            # Carregar o arquivo JSON criptografado
-            with open(file_path, 'r') as file:
-                encrypted_content = json.load(file)["data"]
-
-            # Descriptografar o conteúdo
-            fernet = Fernet(self.encryption_key)
-            decrypted_content = fernet.decrypt(encrypted_content.encode()).decode()
-
-            # Converter JSON para DataFrame
-            data = pd.read_json(decrypted_content, orient='records')
-            logging.info(f"Dados descriptografados com sucesso de {file_path}.")
-            return data
-
-        except Exception as e:
-            logging.error(f"Erro ao descriptografar o arquivo {file_path}: {e}")
-            return None
+            logging.error(f"Erro ao salvar dados criptografados: {e}")
 
 # Exemplo de uso
 if __name__ == "__main__":
-    encryption_key = b'kMFeIcTPHnVRP1XsZ3qBLRMG6qL0JH8sWuE1yN9ybXU='
-    excel_importer = ExcelImporter('caminho/para/arquivo.xlsx', encryption_key)
-    data = excel_importer.import_financial_data(data_type="custos", overwrite=False)
-    if data is not None:
-        print(data.head())
+    encryption_key = Fernet.generate_key()
+    importer = ExcelImporter(encryption_key)
+    importer.import_financial_data("caminho/para/arquivo.xlsx", "custos")
